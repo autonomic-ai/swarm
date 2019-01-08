@@ -1,5 +1,8 @@
 Swarm
 =============
+* 
+Originally forked from [anhldbk/swarm](https://github.com/anhldbk/swarm).
+
 *An elegant Java client for Locust*
 
 ![](docs/images/swarm.png)
