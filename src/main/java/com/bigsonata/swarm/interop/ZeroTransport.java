@@ -22,15 +22,16 @@ public abstract class ZeroTransport extends Transport {
   private int checkInterval = 0;
   private LoopingThread receiver;
   private ZMQ.Context zeroContext = null;
-  private ZMQ.Socket pushSocket;
-  private ZMQ.Socket pullSocket;
+  private ZMQ.Socket clientSocket;
   private CountDownLatch waiter = new CountDownLatch(1);
   private DisruptorBroker sender;
   private TransportMonitor monitor;
+  private String nodeId;
 
-  protected ZeroTransport(Context ctx) {
+  protected ZeroTransport(Context ctx, String nodeId) {
     this.host = ctx.getMasterHost();
     this.port = ctx.getMasterPort();
+    this.nodeId = nodeId;
     if (checkInterval > 0) {
       this.checkInterval = checkInterval;
     }
@@ -49,7 +50,7 @@ public abstract class ZeroTransport extends Transport {
             }
             byte[] bytes = message.getBytes();
             try {
-              if (!pushSocket.send(bytes)) {
+              if (!clientSocket.send(bytes)) {
                 logger.error("Can NOT send");
                 return;
               }
@@ -73,7 +74,7 @@ public abstract class ZeroTransport extends Transport {
     logger.info("> host={}", host);
     logger.info("> port={}", port);
     int interval = 100; // ms
-    this.monitor = new TransportMonitor(host, port, interval);
+    this.monitor = new TransportMonitor(host, port);
   }
 
   private void initializeReceiver() {
@@ -88,7 +89,7 @@ public abstract class ZeroTransport extends Transport {
           @Override
           public Action process() throws Exception {
             try {
-              byte[] bytes = ZeroTransport.this.pullSocket.recv();
+              byte[] bytes = ZeroTransport.this.clientSocket.recv();
               if (bytes != null) {
                 ZeroTransport.this.onMessage(new Message(bytes));
                 return Action.CONTINUE;
@@ -111,6 +112,7 @@ public abstract class ZeroTransport extends Transport {
   }
 
   public void onDisconnected() {
+    logger.warn("Recvd disconnect event");
     if (state.get() != Transport.State.CONNECTED) {
       return;
     }
@@ -124,13 +126,9 @@ public abstract class ZeroTransport extends Transport {
     }
     try {
       logger.info("Releasing network resources...");
-      if (pushSocket != null) {
-        pushSocket.close();
-        pushSocket = null;
-      }
-      if (pullSocket != null) {
-        pullSocket.close();
-        pullSocket = null;
+      if (clientSocket != null) {
+        clientSocket.close();
+        clientSocket = null;
       }
       if (zeroContext != null) {
         //                zeroContext.close();
@@ -147,18 +145,12 @@ public abstract class ZeroTransport extends Transport {
     logger.info(" > port={}", port);
     release();
     boolean success = true;
-    zeroContext = ZMQ.context(2);
-    pushSocket = zeroContext.socket(ZMQ.PUSH);
-    success &= pushSocket.connect(String.format("tcp://%s:%d", host, port));
+    zeroContext = ZMQ.context(1);
+    clientSocket = zeroContext.socket(ZMQ.DEALER);
+    clientSocket.setIdentity(nodeId.getBytes());
+    success &= clientSocket.connect(String.format("tcp://%s:%d", host, port));
     if (!success) {
       logger.error("Can NOT connect to push");
-      return;
-    }
-
-    pullSocket = zeroContext.socket(ZMQ.PULL);
-    success &= pullSocket.connect(String.format("tcp://%s:%d", host, port + 1));
-    if (!success) {
-      logger.error("Can NOT connect to pull");
       return;
     }
 
@@ -220,22 +212,24 @@ public abstract class ZeroTransport extends Transport {
     ZContext ctx;
     private State state;
     private ZMonitor monitor;
+    private String nodeId;
 
-    public TransportMonitor(String host, int port, int interval) {
+    public TransportMonitor(String host, int port, int interval, String nodeId) {
       super("locust-monitor", interval);
       addr = String.format("tcp://%s:%d", host, port);
       state = Transport.State.DISCONNECTED;
+      this.nodeId = nodeId;
     }
 
     public TransportMonitor(String host, int port) {
-      this(host, port, 100);
+      this(host, port, 100, "");
     }
 
     @Override
     public void initialize() {
       super.initialize();
       ctx = new ZContext();
-      socket = ctx.createSocket(ZMQ.PUSH);
+      socket = ctx.createSocket(ZMQ.DEALER);
       socket.setReceiveTimeOut(interval);
     }
 
@@ -244,6 +238,7 @@ public abstract class ZeroTransport extends Transport {
       try {
 
         monitor = new ZMonitor(ctx, socket);
+
         monitor.add(ZMonitor.Event.CONNECTED, ZMonitor.Event.DISCONNECTED);
         monitor.start();
 

@@ -91,7 +91,7 @@ public class Locust implements Disposable, Initializable {
 
     private void initializeTransport() {
         transport =
-                new ZeroTransport(context) {
+                new ZeroTransport(context, nodeID) {
                     @Override
                     public void onMessage(Message message) throws Exception {
                         Locust.this.onMessage(message);
